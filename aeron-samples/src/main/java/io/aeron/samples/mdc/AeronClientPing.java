@@ -14,11 +14,13 @@ import io.aeron.logbuffer.FragmentHandler;
 import io.aeron.logbuffer.Header;
 import io.aeron.samples.SampleConfiguration;
 import org.HdrHistogram.Histogram;
+import org.agrona.BitUtil;
+import org.agrona.BufferUtil;
 import org.agrona.DirectBuffer;
-import org.agrona.ExpandableArrayBuffer;
 import org.agrona.IoUtil;
 import org.agrona.concurrent.BackoffIdleStrategy;
 import org.agrona.concurrent.IdleStrategy;
+import org.agrona.concurrent.UnsafeBuffer;
 
 import java.io.File;
 import java.nio.file.Paths;
@@ -105,6 +107,8 @@ public class AeronClientPing
         private final Histogram histogram = new Histogram(TimeUnit.SECONDS.toNanos(10), 3);
         private final MsgFragmentHandler fragmentHandler = new MsgFragmentHandler(histogram);
         private final IdleStrategy idleStrategy = new BackoffIdleStrategy(1, 1, 1, 100);
+        private static final UnsafeBuffer BUFFER = new UnsafeBuffer(
+            BufferUtil.allocateDirectAligned(Long.BYTES, BitUtil.CACHE_LINE_LENGTH));
 
         private final Aeron aeron;
 
@@ -161,10 +165,9 @@ public class AeronClientPing
             for (int i = 0; i < NUMBER_OF_MESSAGES; )
             {
 
-                ExpandableArrayBuffer buffer = new ExpandableArrayBuffer(Long.BYTES);
-                buffer.putLong(0, System.nanoTime());
+                BUFFER.putLong(0, System.nanoTime());
 
-                int sentCount = msgPublication.send(buffer);
+                int sentCount = msgPublication.send(BUFFER);
                 if (sentCount > 0)
                 {
                     i++;

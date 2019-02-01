@@ -19,7 +19,7 @@ ${JAVA_HOME}/bin/java \
     -cp ../build/libs/samples.jar \
     -XX:+UnlockDiagnosticVMOptions \
     -XX:GuaranteedSafepointInterval=300000 \
-    -Daeron.sample.messages=100000 \
+    -Daeron.sample.messages=10000000 \
     -Daeron.sample.messageLength=32 \
     -Dagrona.disable.bounds.checks=true \
     ${JVM_OPTS} io.aeron.samples.mdc.AeronClientPing
