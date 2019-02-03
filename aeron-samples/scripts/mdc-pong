@@ -22,4 +22,4 @@ ${JAVA_HOME}/bin/java \
     -Dagrona.disable.bounds.checks=true \
     -Daeron.sample.embeddedMediaDriver=true \
     -Daeron.sample.exclusive.publications=true \
-    ${JVM_OPTS} io.aeron.samples.Pong
+    ${JVM_OPTS} io.aeron.samples.MdcPong
