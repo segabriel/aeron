@@ -60,6 +60,7 @@ import static org.agrona.SystemUtil.getDurationInNanos;
  *              remove-member: [memberId] requests removal of a member specified in memberId.
  *             remove-passive: [memberId] requests removal of passive member specified in memberId.
  *               backup-query: [delay] schedules (or displays) time of next backup query for cluster backup.
+ *                 add-member: [memberId] [memberEndpoints] requests adding a member by its memberId and endpoints.
  *  tombstone-latest-snapshot: Mark the latest snapshot as a tombstone so previous is loaded..
  * </pre>
  */
@@ -134,6 +135,15 @@ public class ClusterTool
                     System.exit(-1);
                 }
                 removeMember(System.out, clusterDir, Integer.parseInt(args[2]), true);
+                break;
+
+            case "add-member":
+                if (args.length < 4)
+                {
+                    printHelp(System.out);
+                    System.exit(-1);
+                }
+                addMember(System.out, clusterDir, Integer.parseInt(args[2]), args[3]);
                 break;
 
             case "backup-query":
@@ -489,6 +499,59 @@ public class ClusterTool
         {
             if (consensusModuleProxy.removeMember(
                 aeron.nextCorrelationId(), memberId, isPassive ? BooleanType.TRUE : BooleanType.FALSE))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public static void addMember(
+        final PrintStream out, final File clusterDir, final int memberId, final String memberEndpoints)
+    {
+        if (markFileExists(clusterDir) || TIMEOUT_MS > 0)
+        {
+            try (ClusterMarkFile markFile = openMarkFile(clusterDir, System.out::println))
+            {
+                if (!addMember(markFile, memberId, memberEndpoints))
+                {
+                    out.println("could not send add member request");
+                }
+            }
+        }
+        else
+        {
+            out.println(ClusterMarkFile.FILENAME + " does not exist.");
+        }
+    }
+
+    public static boolean addMember(final File clusterDir, final int memberId, final String memberEndpoints)
+    {
+        if (markFileExists(clusterDir) || TIMEOUT_MS > 0)
+        {
+            try (ClusterMarkFile markFile = openMarkFile(clusterDir, null))
+            {
+                return addMember(markFile, memberId, memberEndpoints);
+            }
+        }
+
+        return false;
+    }
+
+    public static boolean addMember(final ClusterMarkFile markFile, final int memberId, final String memberEndpoints)
+    {
+        final String aeronDirectoryName = markFile.decoder().aeronDirectory();
+        markFile.decoder().archiveChannel();
+        final String channel = markFile.decoder().serviceControlChannel();
+        final int toConsensusModuleStreamId = markFile.decoder().consensusModuleStreamId();
+
+        try (Aeron aeron = Aeron.connect(new Aeron.Context().aeronDirectoryName(aeronDirectoryName));
+            ConsensusModuleProxy consensusModuleProxy = new ConsensusModuleProxy(
+                aeron.addPublication(channel, toConsensusModuleStreamId)))
+        {
+            if (consensusModuleProxy.addMember(
+                aeron.nextCorrelationId(), memberId, memberEndpoints))
             {
                 return true;
             }
