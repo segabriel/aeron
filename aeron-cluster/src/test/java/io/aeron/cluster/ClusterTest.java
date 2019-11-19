@@ -15,13 +15,20 @@
  */
 package io.aeron.cluster;
 
+import io.aeron.CommonContext;
+import io.aeron.archive.ArchiveThreadingMode;
 import io.aeron.cluster.service.Cluster;
+import io.aeron.driver.MinMulticastFlowControlSupplier;
+import io.aeron.driver.ThreadingMode;
+import org.agrona.CloseHelper;
 import org.agrona.collections.MutableInteger;
 import org.agrona.concurrent.IdleStrategy;
 import org.agrona.concurrent.YieldingIdleStrategy;
 import org.agrona.concurrent.status.CountersReader;
 import org.junit.*;
 
+import java.io.File;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
@@ -30,8 +37,9 @@ import static io.aeron.Aeron.NULL_VALUE;
 import static io.aeron.cluster.service.CommitPos.COMMIT_POSITION_TYPE_ID;
 import static org.hamcrest.core.Is.is;
 import static org.junit.Assert.*;
+import static org.junit.Assert.assertThat;
 
-@Ignore
+//@Ignore
 public class ClusterTest
 {
     private static final String MSG = "Hello World!";
@@ -790,6 +798,250 @@ public class ClusterTest
         }
     }
 
+    @Test(timeout = 30_000)
+    public void shouldReplaceStaticNodeWithAnotherOne() throws Exception
+    {
+        TestNode testNode = null;
+        try (TestCluster cluster = TestCluster.startThreeNodeStaticCluster(NULL_VALUE))
+        {
+            TestNode leader = cluster.awaitLeader();
+            final TestNode follower = cluster.followers().get(0);
+            final TestNode follower2 = cluster.followers().get(1);
+            final int followerMemberId = follower.clusterMembership().memberId;
+            System.out.println(leader.clusterMembership().activeMembersStr);
+
+            cluster.stopNode(follower);
+            leader.removeMember(followerMemberId, false);
+
+            leader = cluster.awaitLeader();
+            final String staticClusterMembers = leader.clusterMembership().activeMembersStr;
+            System.out.println(staticClusterMembers);
+
+            final int memberId = 6;
+            final String memberEndpoints = memberEndpoints(memberId);
+            leader.addMember(memberId, memberEndpoints);
+            testNode = startStaticNode(memberId, staticClusterMembers + "|" + memberId + "," + memberEndpoints, true);
+
+            leader = cluster.awaitLeader();
+            System.out.println(leader.clusterMembership().activeMembersStr);
+
+            cluster.connectClient();
+
+            final int messageCount = 10;
+            cluster.sendMessages(messageCount);
+            cluster.awaitResponses(messageCount);
+
+            assertThat(leader.service().messageCount(), is(messageCount));
+            assertThat(follower2.service().messageCount(), is(messageCount));
+            assertThat(testNode.service().messageCount(), is(messageCount));
+        } finally
+        {
+            CloseHelper.quietClose(testNode);
+        }
+    }
+
+
+    @Test(timeout = 30_000)
+    public void shouldAddStaticMemberAtRuntime() throws Exception
+    {
+        List<TestNode> nodes = new ArrayList<>();
+        try (TestCluster cluster = TestCluster.startSingleNodeStaticCluster())
+        {
+            TestNode leader = cluster.awaitLeader();
+
+            int memberIdCounter = leader.clusterMembership().memberId;
+            String staticClusterMembers = leader.clusterMembership().activeMembersStr;
+            System.out.println(staticClusterMembers);
+
+            for (int i = 0; i < 2; i++)
+            {
+                final int memberId = ++memberIdCounter;
+                final String memberEndpoints = memberEndpoints(memberId);
+                staticClusterMembers = staticClusterMembers + "|" + memberId + "," + memberEndpoints;
+
+                leader = cluster.awaitLeader();
+                leader.addMember(memberId, memberEndpoints);
+
+
+                System.out.println(staticClusterMembers);
+                final TestNode node = startStaticNode(memberId, staticClusterMembers, true);
+                System.out.println(node.clusterMembership().activeMembersStr);
+                nodes.add(node);
+            }
+
+            leader = cluster.awaitLeader();
+
+            System.out.println(leader.index());
+            System.out.println(leader.clusterMembership().activeMembersStr);
+
+            cluster.connectClient();
+
+            final int messageCount = 10;
+            final int previousSent = leader.service().messageCount();
+            System.out.println("previousSent = " + previousSent);
+            cluster.sendMessages(messageCount);
+            cluster.awaitResponses(messageCount);
+
+            assertThat(leader.service().messageCount(), is(previousSent + messageCount));
+            for (TestNode node : nodes)
+            {
+                assertThat(node.service().messageCount(), is(previousSent + messageCount));
+            }
+        } finally
+        {
+            CloseHelper.quietCloseAll(nodes);
+        }
+    }
+
+    @Test(timeout = 60_000)
+    public void shouldAddStaticMemberAtRuntime2() throws Exception
+    {
+        List<TestNode> nodes = new ArrayList<>();
+        try (TestCluster cluster = TestCluster.startSingleNodeStaticCluster())
+        {
+            TestNode leader = cluster.awaitLeader();
+
+            int memberIdCounter = leader.clusterMembership().memberId;
+            String staticClusterMembers = leader.clusterMembership().activeMembersStr;
+            System.out.println(staticClusterMembers);
+
+            for (int i = 0; i < 2; i++)
+            {
+                final int memberId = ++memberIdCounter;
+                final String memberEndpoints = memberEndpoints(memberId);
+                staticClusterMembers = staticClusterMembers + "|" + memberId + "," + memberEndpoints;
+
+                leader = cluster.awaitLeader();
+                leader.addMember(memberId, memberEndpoints);
+
+
+                System.out.println(staticClusterMembers);
+                final TestNode node = startStaticNode(memberId, staticClusterMembers, true);
+                System.out.println(node.clusterMembership().activeMembersStr);
+                nodes.add(node);
+            }
+
+            leader = cluster.awaitLeader();
+
+            System.out.println(leader.index());
+            System.out.println(leader.clusterMembership().activeMembersStr);
+
+
+            final TestNode removedNode = nodes.remove(0);
+            int removedMemberId = removedNode.clusterMembership().memberId;
+            CloseHelper.quietClose(removedNode);
+            leader = cluster.awaitLeader();
+            leader.removeMember(removedMemberId, false);
+
+//            Thread.sleep(5000);
+            {
+                leader = cluster.awaitLeader();
+                staticClusterMembers = leader.clusterMembership().activeMembersStr;
+
+//                final int memberId = ++memberIdCounter;
+                final int memberId = removedMemberId;
+                final String memberEndpoints = memberEndpoints(memberId);
+                staticClusterMembers = staticClusterMembers + "|" + memberId + "," + memberEndpoints;
+
+                leader = cluster.awaitLeader();
+                leader.addMember(memberId, memberEndpoints);
+
+//                Thread.sleep(5000);
+
+                System.out.println(staticClusterMembers);
+                final TestNode node = startStaticNode(memberId, staticClusterMembers, true);
+                System.out.println(node.clusterMembership().activeMembersStr);
+                nodes.add(node);
+
+            }
+
+//            Thread.sleep(5000);
+
+            leader = cluster.awaitLeader();
+
+
+            cluster.connectClient();
+
+            final int messageCount = 10;
+            final int previousSent = leader.service().messageCount();
+            System.out.println("previousSent = " + previousSent);
+            cluster.sendMessages(messageCount);
+            cluster.awaitResponses(messageCount);
+
+            assertThat(leader.service().messageCount(), is(previousSent + messageCount));
+            for (TestNode node : nodes)
+            {
+                System.err.println(node.service().index());
+                assertThat(node.service().messageCount(), is(previousSent + messageCount));
+            }
+        } finally
+        {
+            CloseHelper.quietCloseAll(nodes);
+        }
+    }
+
+
+    @Test(timeout = 30_000)
+    public void shouldReplaceStaticNodeWithAnotherOne2() throws Exception
+    {
+        TestNode testNode = null;
+        try (TestCluster cluster = TestCluster.startThreeNodeStaticCluster(NULL_VALUE))
+        {
+            TestNode leader = cluster.awaitLeader();
+            final TestNode follower = cluster.followers().get(0);
+//            final TestNode follower2 = cluster.followers().get(1);
+
+            String staticClusterMembers = leader.clusterMembership().activeMembersStr;
+            System.out.println(staticClusterMembers);
+
+            final int memberId = follower.clusterMembership().memberId;
+//            final ClusterMember[] clusterMembers = ClusterMember.parse(cluster.staticClusterMembers());
+//            final String memberEndpoints = ClusterMember.findMember(clusterMembers, memberId).endpointsDetail();
+
+//            cluster.connectClient();
+
+//            final int messageCount = 10;
+//            cluster.sendMessages(messageCount);
+//            cluster.awaitResponses(messageCount);
+//
+//            Thread.sleep(1000);
+//
+//            assertThat(follower.service().messageCount(), is(messageCount));
+
+
+            cluster.stopNode(follower);
+            leader.removeMember(memberId, false);
+
+
+            leader = cluster.awaitLeader();
+            staticClusterMembers = leader.clusterMembership().activeMembersStr;
+            System.out.println(staticClusterMembers);
+
+            leader.addMember(memberId, memberEndpoints(memberId));
+
+            testNode = startStaticNode(memberId, staticClusterMembers + "|" + memberId + "," + memberEndpoints(memberId), true);
+
+//            Thread.sleep(2000);
+
+            leader = cluster.awaitLeader();
+            System.out.println(leader.clusterMembership().activeMembersStr);
+
+            cluster.connectClient();
+            final int messageCount = 10;
+            cluster.sendMessages(messageCount);
+            cluster.awaitResponses(messageCount);
+
+            Thread.sleep(3000);
+
+            assertThat(leader.service().messageCount(), is(messageCount));
+//            assertThat(follower2.service().messageCount(), is(messageCount));
+            assertThat(testNode.service().messageCount(), is(messageCount));
+        } finally
+        {
+            CloseHelper.quietClose(testNode);
+        }
+    }
+
     private void shouldCatchUpAfterFollowerMissesMessage(final String message) throws InterruptedException
     {
         try (TestCluster cluster = TestCluster.startThreeNodeStaticCluster(NULL_VALUE))
@@ -857,5 +1109,88 @@ public class ClusterTest
         thread.setName("message-thread");
 
         return thread;
+    }
+
+    private static final long MAX_CATALOG_ENTRIES = 128;
+    private static final String LOG_CHANNEL =
+        "aeron:udp?term-length=256k|control-mode=manual|control=localhost:20550";
+    private static final String ARCHIVE_CONTROL_REQUEST_CHANNEL =
+        "aeron:udp?term-length=64k|endpoint=localhost:8010";
+    private static final String ARCHIVE_CONTROL_RESPONSE_CHANNEL =
+        "aeron:udp?term-length=64k|endpoint=localhost:8020";
+    private static final String ARCHIVE_RECORDING_EVENTS_CHANNEL =
+        "aeron:udp?control-mode=dynamic|control=localhost:8030";
+
+    private TestNode startStaticNode(final int index, final String staticClusterMembers, final boolean cleanStart)
+    {
+        final String baseDirName = CommonContext.getAeronDirectoryName() + "-" + index;
+        final String aeronDirName = CommonContext.getAeronDirectoryName() + "-" + index + "-driver";
+        final TestNode.Context context = new TestNode.Context(new TestNode.TestService().index(index));
+
+        context.aeronArchiveContext
+            .controlRequestChannel(memberSpecificPort(ARCHIVE_CONTROL_REQUEST_CHANNEL, index))
+            .controlRequestStreamId(100)
+            .controlResponseChannel(memberSpecificPort(ARCHIVE_CONTROL_RESPONSE_CHANNEL, index))
+            .controlResponseStreamId(110 + index)
+            .recordingEventsChannel(memberSpecificPort(ARCHIVE_RECORDING_EVENTS_CHANNEL, index))
+            .aeronDirectoryName(baseDirName);
+
+        context.mediaDriverContext
+            .aeronDirectoryName(aeronDirName)
+            .threadingMode(ThreadingMode.SHARED)
+            .termBufferSparseFile(true)
+            .multicastFlowControlSupplier(new MinMulticastFlowControlSupplier())
+            .errorHandler(TestUtil.errorHandler(index))
+            .dirDeleteOnShutdown(true)
+            .dirDeleteOnStart(true);
+
+        context.archiveContext
+            .maxCatalogEntries(MAX_CATALOG_ENTRIES)
+            .aeronDirectoryName(aeronDirName)
+            .archiveDir(new File(baseDirName, "archive"))
+            .controlChannel(context.aeronArchiveContext.controlRequestChannel())
+            .controlStreamId(context.aeronArchiveContext.controlRequestStreamId())
+            .localControlChannel("aeron:ipc?term-length=64k")
+            .recordingEventsEnabled(false)
+            .localControlStreamId(context.aeronArchiveContext.controlRequestStreamId())
+            .recordingEventsChannel(context.aeronArchiveContext.recordingEventsChannel())
+            .threadingMode(ArchiveThreadingMode.SHARED)
+            .deleteArchiveOnStart(cleanStart);
+
+        context.consensusModuleContext
+            .errorHandler(TestUtil.errorHandler(index))
+            .clusterMemberId(index)
+            .clusterMembers(staticClusterMembers)
+            .appointedLeaderId(NULL_VALUE)
+            .aeronDirectoryName(aeronDirName)
+            .clusterDir(new File(baseDirName, "consensus-module"))
+            .ingressChannel("aeron:udp?term-length=64k")
+            .logChannel(memberSpecificPort(LOG_CHANNEL, index))
+            .archiveContext(context.aeronArchiveContext.clone())
+            .deleteDirOnStart(cleanStart);
+
+        context.serviceContainerContext
+            .aeronDirectoryName(aeronDirName)
+            .archiveContext(context.aeronArchiveContext.clone())
+            .clusterDir(new File(baseDirName, "service"))
+            .clusteredService(context.service)
+            .errorHandler(TestUtil.errorHandler(index));
+
+        return new TestNode(context);
+    }
+
+    private static String memberSpecificPort(final String channel, final int memberId)
+    {
+        return channel.substring(0, channel.length() - 1) + memberId;
+    }
+
+    private static String memberEndpoints(final int i)
+    {
+        return
+            "localhost:2011" + i + ',' +
+            "localhost:2022" + i + ',' +
+            "localhost:2033" + i + ',' +
+            "localhost:2044" + i + ',' +
+            "localhost:801" + i;
     }
 }

@@ -211,6 +211,15 @@ class TestNode implements AutoCloseable
         }
     }
 
+    void addMember(final int memberId, final String memberEndpoints) {
+        final File clusterDir = clusteredMediaDriver.consensusModule().context().clusterDir();
+
+        if (!ClusterTool.addMember(clusterDir, memberId, memberEndpoints))
+        {
+            throw new IllegalStateException("could not add member");
+        }
+    }
+
     static class TestService extends StubClusteredService
     {
         private int index;
